@@ -72,6 +72,38 @@ impl PercyDom {
         pdom
     }
 
+    /// Create a new `PercyDom`.
+    ///
+    /// Your passed in `mount` element will be hydrated to match the `current_vdom`.
+    /// Useful in case you've server-side rendered your application and want to
+    /// patch in small differences or event handlers.
+    pub fn new_hydrate_mount(current_vdom: VirtualNode, mount: Element) -> PercyDom {
+        let mut events = VirtualEvents::new();
+
+        match &current_vdom {
+            VirtualNode::Text(_) => {
+                panic!("PercyDom::newd (hydrate): VDOM root cannot be a text node");
+            }
+            VirtualNode::Element(element_node) => {
+                let (element, event_node) =
+                    element_node.hydrate_element_node_from_dom_element(&mut events, mount);
+
+                events.set_root(event_node);
+
+                let mut pdom = PercyDom {
+                    current_vdom,
+                    root_node: element.into(),
+                    events,
+                    event_delegation_listeners: HashMap::new(),
+                };
+
+                pdom.attach_event_listeners();
+
+                pdom
+            }
+        }
+    }
+
     /// Diff the current virtual dom with the new virtual dom that is being passed in.
     ///
     /// Then use that diff to patch the real DOM in the user's browser so that they are
