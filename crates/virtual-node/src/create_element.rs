@@ -253,9 +253,8 @@ impl VElement {
                     // di now points before the appended node; we won't need it again anyway.
                     continue;
                 } else {
-                    // Element missing: fail fast (or you can choose to create it).
-                    debug_assert!(false, "Percy hydrate: missing DOM element for VElement");
-                    return;
+                    // Element missing: fail fast
+                    panic!("Percy hydrate: Missing DOM element for VElement at child index {}. The mount element has fewer children than the VDOM.", vi);
                 }
             }
 
@@ -311,20 +310,31 @@ impl VElement {
                     di += 1;
                 }
                 VirtualNode::Element(velem) => {
-                    if target.node_type() != Node::ELEMENT_NODE {
-                        // Scan ahead for an element; cheaper than per-iteration DOM calls because we use our Vec snapshot
+                    // Check if current target matches the expected tag
+                    let matches_tag = if target.node_type() == Node::ELEMENT_NODE {
+                        let elem: Element = target.clone().unchecked_into();
+                        elem.tag_name().to_lowercase() == velem.tag.to_lowercase()
+                    } else {
+                        false
+                    };
+
+                    if !matches_tag {
+                        // Scan ahead for an element with matching tag name
                         let mut found = None;
+                        let expected_tag = velem.tag.to_lowercase();
                         for j in di + 1..real_children.len() {
                             if real_children[j].node_type() == Node::ELEMENT_NODE {
-                                found = Some(j);
-                                break;
+                                let elem: Element = real_children[j].clone().unchecked_into();
+                                if elem.tag_name().to_lowercase() == expected_tag {
+                                    found = Some(j);
+                                    break;
+                                }
                             }
                         }
                         if let Some(j) = found {
                             di = j;
                         } else {
-                            debug_assert!(false, "Percy hydrate: could not find element for VElement");
-                            return;
+                            panic!("Percy hydrate: Could not find matching DOM element for VElement '{}' at child index {}. Expected an element with tag '{}' but couldn't find one.", velem.tag, vi, velem.tag);
                         }
                     }
 

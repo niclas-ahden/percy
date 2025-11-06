@@ -33,9 +33,18 @@ impl PercyDom {
         let (created_node, events_node) = current_vdom.create_dom_node(&mut events);
         events.set_root(events_node);
 
+        Self::finalize_pdom(current_vdom, created_node, events)
+    }
+
+    /// Helper function to finalize PercyDom construction by setting up event listeners
+    fn finalize_pdom(
+        current_vdom: VirtualNode,
+        root_node: Node,
+        events: VirtualEvents,
+    ) -> PercyDom {
         let mut pdom = PercyDom {
             current_vdom,
-            root_node: created_node,
+            root_node,
             events,
             event_delegation_listeners: HashMap::new(),
         };
@@ -82,24 +91,25 @@ impl PercyDom {
 
         match &current_vdom {
             VirtualNode::Text(_) => {
-                panic!("PercyDom::newd (hydrate): VDOM root cannot be a text node");
+                panic!("PercyDom::new_hydrate_mount: VDOM root cannot be a text node");
             }
             VirtualNode::Element(element_node) => {
+                // Validate that the mount element's tag matches the VDOM root tag
+                let mount_tag = mount.tag_name().to_lowercase();
+                let vdom_tag = element_node.tag.to_lowercase();
+                if mount_tag != vdom_tag {
+                    panic!(
+                        "PercyDom::new_hydrate_mount: Mount element tag '{}' does not match VDOM root tag '{}'",
+                        mount_tag, vdom_tag
+                    );
+                }
+
                 let (element, event_node) =
                     element_node.hydrate_element_node_from_dom_element(&mut events, mount);
 
                 events.set_root(event_node);
 
-                let mut pdom = PercyDom {
-                    current_vdom,
-                    root_node: element.into(),
-                    events,
-                    event_delegation_listeners: HashMap::new(),
-                };
-
-                pdom.attach_event_listeners();
-
-                pdom
+                Self::finalize_pdom(current_vdom, element.into(), events)
             }
         }
     }
