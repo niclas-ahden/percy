@@ -106,14 +106,16 @@ mod diff_ctx {
 }
 
 fn diff_recursive(ctx: &mut DiffContext) {
-    let job = ctx.next_job();
-    match job {
-        Some(Job::Diff(diff_job)) => process_diff_job(ctx, diff_job),
-        Some(Job::ProcessDeleted(delete_job)) => process_delete_job(ctx, delete_job),
-        None => return,
-    };
-
-    diff_recursive(ctx);
+    // Use an explicit loop instead of tail recursion to avoid potential
+    // stack overflow in WASM where stack space is limited (~1MB default).
+    loop {
+        let job = ctx.next_job();
+        match job {
+            Some(Job::Diff(diff_job)) => process_diff_job(ctx, diff_job),
+            Some(Job::ProcessDeleted(delete_job)) => process_delete_job(ctx, delete_job),
+            None => return,
+        };
+    }
 }
 
 fn process_diff_job<'a>(ctx: &mut DiffContext<'a>, diff_job: DiffJob<'a>) {
