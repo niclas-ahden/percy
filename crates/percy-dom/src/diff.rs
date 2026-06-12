@@ -751,8 +751,14 @@ fn maybe_push_move_before<'a>(ctx: &mut DiffContext<'a>, old_idx: u32, move_befo
 /// True when `old` and `new` have the same number of children and the same identity at
 /// every position: same element tag (so implicit, tag-based keys line up) and the same
 /// explicit `key` attribute where present. In that case the keyed reconciliation would
-/// match each child to its own position and emit no inserts/removes/moves, so children
+/// match each node to its own position and emit no inserts/removes/moves, so children
 /// can be diffed pairwise. Any tag/variant/key mismatch falls back to the full algorithm.
+///
+/// Key-attribute PRESENCE must match per position, not just the string value: the full
+/// algorithm suppresses an element's implicit (tag-based) key whenever a `key` attribute
+/// exists, even a non-string one, so `div key=true` and a bare `div` carry different
+/// identities. Non-string keys (matching presence) also fall back: such nodes are
+/// unkeyed to the full algorithm and their pairing depends on the surrounding pool.
 fn children_are_positionally_aligned(old: &VElement, new: &VElement) -> bool {
     if old.children.len() != new.children.len() {
         return false;
@@ -763,10 +769,15 @@ fn children_are_positionally_aligned(old: &VElement, new: &VElement) -> bool {
                 if old_elem.tag != new_elem.tag {
                     return false;
                 }
-                let old_key = old_elem.attrs.get("key").and_then(|k| k.as_string());
-                let new_key = new_elem.attrs.get("key").and_then(|k| k.as_string());
-                if old_key != new_key {
-                    return false;
+                match (old_elem.attrs.get("key"), new_elem.attrs.get("key")) {
+                    (None, None) => {}
+                    (Some(old_key), Some(new_key)) => {
+                        match (old_key.as_string(), new_key.as_string()) {
+                            (Some(old_key), Some(new_key)) if old_key == new_key => {}
+                            _ => return false,
+                        }
+                    }
+                    _ => return false,
                 }
             }
             (VirtualNode::Text(_), VirtualNode::Text(_)) => {}
@@ -865,6 +876,51 @@ mod tests {
     use wasm_bindgen::JsValue;
 
     use super::diff_test_case::*;
+
+    /// The fast path must treat key-attribute presence as part of a child's identity:
+    /// the full algorithm drops an element's implicit key whenever any `key` attribute
+    /// exists, even a non-string one, so positions only align when both sides agree.
+    #[test]
+    fn positional_alignment_requires_matching_key_presence() {
+        use virtual_node::{AttributeValue, VElement};
+
+        fn div(key: Option<AttributeValue>) -> VirtualNode {
+            let mut elem = VElement::new("div");
+            if let Some(key) = key {
+                elem.attrs.insert("key".to_string(), key);
+            }
+            VirtualNode::Element(elem)
+        }
+        fn parent(children: Vec<VirtualNode>) -> VElement {
+            let mut elem = VElement::new("div");
+            elem.children = children;
+            elem
+        }
+        let string_key = |s: &str| Some(AttributeValue::String(s.to_string()));
+        let bool_key = || Some(AttributeValue::Bool(true));
+
+        // Same string key at every position: aligned.
+        assert!(children_are_positionally_aligned(
+            &parent(vec![div(string_key("a")), div(None)]),
+            &parent(vec![div(string_key("a")), div(None)]),
+        ));
+        // Key attribute present on one side only: not aligned, even though neither
+        // side has a string key.
+        assert!(!children_are_positionally_aligned(
+            &parent(vec![div(bool_key()), div(None)]),
+            &parent(vec![div(None), div(None)]),
+        ));
+        // Non-string keys on both sides: fall back to the full algorithm.
+        assert!(!children_are_positionally_aligned(
+            &parent(vec![div(bool_key())]),
+            &parent(vec![div(bool_key())]),
+        ));
+        // Differing string keys: not aligned.
+        assert!(!children_are_positionally_aligned(
+            &parent(vec![div(string_key("a"))]),
+            &parent(vec![div(string_key("b"))]),
+        ));
+    }
 
     /// Verify that we can generate patches that replace a virtual node with another one.
     #[test]
