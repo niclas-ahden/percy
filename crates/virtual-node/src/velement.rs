@@ -1,13 +1,14 @@
-use std::collections::HashMap;
 use std::fmt;
 
 use crate::event::Events;
 use crate::VirtualNode;
 
 pub use self::attribute_value::*;
+pub use self::attributes::*;
 pub use self::special_attributes::*;
 
 mod attribute_value;
+mod attributes;
 mod special_attributes;
 
 #[derive(PartialEq)]
@@ -15,7 +16,7 @@ pub struct VElement {
     /// The HTML tag, such as "div"
     pub tag: String,
     /// HTML attributes such as id, class, style, etc
-    pub attrs: HashMap<String, AttributeValue>,
+    pub attrs: Attributes,
     /// Events that will get added to your real DOM element via `.addEventListener`
     ///
     /// Events natively handled in HTML such as onclick, onchange, oninput and others
@@ -35,7 +36,7 @@ impl VElement {
     {
         VElement {
             tag: tag.into(),
-            attrs: HashMap::new(),
+            attrs: Attributes::new(),
             events: Events::new(),
             children: vec![],
             special_attributes: SpecialAttributes::default(),
