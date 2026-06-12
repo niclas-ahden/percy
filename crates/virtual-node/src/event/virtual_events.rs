@@ -3,7 +3,7 @@ use crate::event::EventHandler;
 use js_sys::Reflect;
 use std::cell::{Ref, RefCell, RefMut};
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use wasm_bindgen::JsValue;
 
 // Every real DOM element that we create gets a property set on it that can be used to look up
@@ -74,7 +74,11 @@ struct VirtualEventsInner {
 #[derive(Debug)]
 pub struct VirtualEventNode {
     variant: VirtualEventNodeVariant,
-    previous_sibling: Option<Rc<RefCell<VirtualEventNode>>>,
+    // `previous_sibling` is a `Weak` back-reference: the owning chain is forward
+    // (parent -> first_child, then node -> next_sibling), so making the backward link
+    // strong too would form an Rc cycle between every adjacent pair of siblings and leak
+    // the whole list when it's detached (it did — see Joy TODO #2 / tests/vdom/leak.roc).
+    previous_sibling: Option<Weak<RefCell<VirtualEventNode>>>,
     next_sibling: Option<Rc<RefCell<VirtualEventNode>>>,
 }
 
@@ -302,9 +306,9 @@ impl VirtualEventNode {
         }
     }
 
-    /// Get the previous sibling.
-    pub fn previous_sibling(&self) -> Option<&Rc<RefCell<VirtualEventNode>>> {
-        self.previous_sibling.as_ref()
+    /// Get the previous sibling (upgraded from the weak back-reference).
+    pub fn previous_sibling(&self) -> Option<Rc<RefCell<VirtualEventNode>>> {
+        self.previous_sibling.as_ref().and_then(|w| w.upgrade())
     }
 
     /// Get the next sibling.
@@ -334,16 +338,18 @@ impl VirtualEventNode {
         } else if is_first_sibling {
             parent.children.as_mut().unwrap().first_child = child.next_sibling.clone().unwrap();
         } else if is_last_sibling {
-            parent.children.as_mut().unwrap().last_child = child.previous_sibling.clone().unwrap();
+            parent.children.as_mut().unwrap().last_child =
+                child.previous_sibling.clone().unwrap().upgrade().unwrap();
         }
 
-        match (child.previous_sibling.as_mut(), child.next_sibling.as_mut()) {
+        match (child.previous_sibling.clone(), child.next_sibling.clone()) {
             (Some(previous), Some(next)) => {
+                let previous = previous.upgrade().unwrap();
                 previous.borrow_mut().next_sibling = Some(next.clone());
-                next.borrow_mut().previous_sibling = Some(previous.clone());
+                next.borrow_mut().previous_sibling = Some(Rc::downgrade(&previous));
             }
             (Some(previous), None) => {
-                previous.borrow_mut().next_sibling = None;
+                previous.upgrade().unwrap().borrow_mut().next_sibling = None;
             }
             (None, Some(next)) => {
                 next.borrow_mut().previous_sibling = None;
@@ -368,7 +374,7 @@ impl VirtualEventNode {
             let mut existing_borrow = existing.borrow_mut();
             match existing_borrow.previous_sibling.take() {
                 Some(previous) => {
-                    previous.borrow_mut().next_sibling = Some(new.clone());
+                    previous.upgrade().unwrap().borrow_mut().next_sibling = Some(new.clone());
                     new_borrow.previous_sibling = Some(previous);
                 }
                 None => {
@@ -378,7 +384,7 @@ impl VirtualEventNode {
         }
 
         new.borrow_mut().next_sibling = Some(existing.clone());
-        existing.borrow_mut().previous_sibling = Some(new);
+        existing.borrow_mut().previous_sibling = Some(Rc::downgrade(&new));
     }
 }
 
@@ -409,7 +415,7 @@ impl VirtualEventElement {
                     children.last_child.borrow_mut().next_sibling = Some(new_child.clone());
                     let mut new_child_borrow = new_child.borrow_mut();
 
-                    new_child_borrow.previous_sibling = Some(children.last_child.clone());
+                    new_child_borrow.previous_sibling = Some(Rc::downgrade(&children.last_child));
                     new_child_borrow.next_sibling = None;
                 }
 
