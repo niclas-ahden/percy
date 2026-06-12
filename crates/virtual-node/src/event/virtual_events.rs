@@ -77,7 +77,7 @@ pub struct VirtualEventNode {
     // `previous_sibling` is a `Weak` back-reference: the owning chain is forward
     // (parent -> first_child, then node -> next_sibling), so making the backward link
     // strong too would form an Rc cycle between every adjacent pair of siblings and leak
-    // the whole list when it's detached (it did — see Joy TODO #2 / tests/vdom/leak.roc).
+    // the whole list when it's detached.
     previous_sibling: Option<Weak<RefCell<VirtualEventNode>>>,
     next_sibling: Option<Rc<RefCell<VirtualEventNode>>>,
 }
