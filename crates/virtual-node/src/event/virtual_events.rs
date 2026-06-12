@@ -519,6 +519,31 @@ mod tests {
         assert_elem_children_equal(node.as_element().unwrap(), &[]);
     }
 
+    /// Verify that dropping a node tree actually frees its children: sibling links must
+    /// not form an Rc cycle (previous_sibling is a Weak reference), or every adjacent
+    /// pair of siblings would keep the whole list alive after it was detached.
+    #[test]
+    fn dropped_children_are_freed() {
+        let events = VirtualEvents::new_with_prefix(1.);
+
+        let mut node = events.create_element_node();
+        let children = create_element_nodes(&events, 3);
+        {
+            let elem = node.as_element_mut().unwrap();
+            for child in &children {
+                elem.append_child(child.clone());
+            }
+        }
+
+        let weak: Vec<_> = children.iter().map(Rc::downgrade).collect();
+        drop(children);
+        drop(node);
+
+        for (idx, weak_child) in weak.iter().enumerate() {
+            assert!(weak_child.upgrade().is_none(), "child {} leaked", idx);
+        }
+    }
+
     /// Verify that we can replace a node with another node.
     #[test]
     fn replace_node() {
