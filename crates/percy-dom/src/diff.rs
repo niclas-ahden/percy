@@ -448,6 +448,33 @@ fn generate_patches_for_children<'a, 'b>(
     // TODO: Refactor into smaller functions
     //       Optimize
 
+    // Fast path: when the two child lists are positionally aligned (same length, and the
+    // same key -- explicit `key` attribute, otherwise implicit by element tag -- at every
+    // position), no child is inserted, removed, or moved. The full keyed reconciliation
+    // below would, in that case, match every node to its own position (the longest
+    // increasing subsequence is the identity) and emit no structural patches -- after
+    // building several HashMaps, computing an LIS, and draining `jobs` with an O(n^2)
+    // `remove(0)` loop. Diff each child against its positional counterpart instead. This
+    // is the common case for in-place updates (select / update / replace-text) and is
+    // where non-keyed lists spend most of their diff time.
+    if children_are_positionally_aligned(old_element, new_element) {
+        let node_idx_of_first_child = ctx.next_old_node_idx();
+        ctx.increment_old_node_idx(old_element.children.len());
+        for (idx, (old_child, new_child)) in old_element
+            .children
+            .iter()
+            .zip(new_element.children.iter())
+            .enumerate()
+        {
+            ctx.push_diff_job(DiffJob {
+                old_node_idx: node_idx_of_first_child + idx as u32,
+                old: old_child,
+                new: new_child,
+            });
+        }
+        return;
+    }
+
     let old_child_count = old_element.children.len();
 
     let mut key_to_old_child_idx: HashMap<ElementKey, usize> = HashMap::new();
@@ -618,10 +645,15 @@ fn generate_patches_for_children<'a, 'b>(
 
     jobs.sort_by(|a, b| a.0.cmp(&b.0));
 
+    // Drain the (sorted, distinct-keyed) jobs with a single forward pass. The previous
+    // `jobs.remove(0)` in this loop was O(n^2) for large child lists (each remove shifts
+    // the whole Vec); on a 1,000-child list that dominated remove/append diffs. Output is
+    // identical: for each old child index we either emit its matching diff job or a delete.
     let mut to_remove = vec![];
+    let mut jobs_iter = jobs.into_iter().peekable();
     for child_idx in 0..old_child_count {
-        if jobs.get(0).map(|j| j.0) == Some(child_idx) {
-            let job = jobs.remove(0);
+        if jobs_iter.peek().map(|j| j.0) == Some(child_idx) {
+            let job = jobs_iter.next().unwrap();
             ctx.push_diff_job(job.1);
         } else {
             let node_idx = node_idx_of_first_child + child_idx as u32;
@@ -714,6 +746,34 @@ fn maybe_push_move_before<'a>(ctx: &mut DiffContext<'a>, old_idx: u32, move_befo
         to_move: move_before.clone(),
     });
     move_before.clear();
+}
+
+/// True when `old` and `new` have the same number of children and the same identity at
+/// every position: same element tag (so implicit, tag-based keys line up) and the same
+/// explicit `key` attribute where present. In that case the keyed reconciliation would
+/// match each child to its own position and emit no inserts/removes/moves, so children
+/// can be diffed pairwise. Any tag/variant/key mismatch falls back to the full algorithm.
+fn children_are_positionally_aligned(old: &VElement, new: &VElement) -> bool {
+    if old.children.len() != new.children.len() {
+        return false;
+    }
+    for (old_child, new_child) in old.children.iter().zip(new.children.iter()) {
+        match (old_child, new_child) {
+            (VirtualNode::Element(old_elem), VirtualNode::Element(new_elem)) => {
+                if old_elem.tag != new_elem.tag {
+                    return false;
+                }
+                let old_key = old_elem.attrs.get("key").and_then(|k| k.as_string());
+                let new_key = new_elem.attrs.get("key").and_then(|k| k.as_string());
+                if old_key != new_key {
+                    return false;
+                }
+            }
+            (VirtualNode::Text(_), VirtualNode::Text(_)) => {}
+            _ => return false,
+        }
+    }
+    true
 }
 
 fn node_key<'a>(

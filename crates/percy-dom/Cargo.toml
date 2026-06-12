@@ -45,6 +45,13 @@ features = [
 [dev-dependencies]
 console_error_panic_hook = "0.1.5"
 wasm-bindgen-test = "0.3"
+# Native `diff` benchmarks (see benches/diff.rs). default-features = false drops the
+# plotters/gnuplot HTML report machinery; baseline save/compare still works.
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "diff"
+harness = false
 
 [dev-dependencies.web-sys]
 version = "0.3"
