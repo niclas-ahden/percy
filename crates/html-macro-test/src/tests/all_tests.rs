@@ -6,7 +6,6 @@
 //! tests live.
 
 use html_macro::html;
-use std::collections::HashMap;
 use virtual_node::{AttributeValue, IterableNodes, VElement, VText, View, VirtualNode};
 
 #[must_use]
@@ -33,11 +32,8 @@ fn empty_div() {
 
 #[test]
 fn one_attr() {
-    let mut attrs = HashMap::new();
-    let id = "hello-world".into();
-    attrs.insert("id".to_string(), id);
     let mut expected = VElement::new("div");
-    expected.attrs = attrs;
+    expected.attrs.insert("id".to_string(), "hello-world".into());
 
     HtmlMacroTest {
         generated: html! { <div id="hello-world"></div> },
