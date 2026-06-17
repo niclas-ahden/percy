@@ -77,6 +77,49 @@ fn append_children() {
     .test();
 }
 
+/// wasm-pack test --chrome --headless crates/percy-dom --test diff_patch -- grow_same_tag_children
+#[wasm_bindgen_test]
+fn grow_same_tag_children() {
+    // Going from 1 child to 3 children of the same tag should produce exactly 3 children,
+    // not duplicates. This is the scenario where a hero slideshow starts with 1 image and
+    // expands to 3 images.
+    DiffPatchTest {
+        desc: "Grow from 1 to 3 same-tag children",
+        old: html! {
+          <div>
+            <img class="a" src="1.jpg" />
+          </div>
+        },
+        new: html! {
+          <div>
+            <img class="b" src="1.jpg" />
+            <img class="c" src="2.jpg" />
+            <img class="d" src="3.jpg" />
+          </div>
+        },
+        override_expected: None,
+    }
+    .test();
+
+    // Going from 1 to 2 same-tag children
+    DiffPatchTest {
+        desc: "Grow from 1 to 2 same-tag children",
+        old: html! {
+          <div>
+            <img class="a" src="1.jpg" />
+          </div>
+        },
+        new: html! {
+          <div>
+            <img class="b" src="1.jpg" />
+            <img class="c" src="2.jpg" />
+          </div>
+        },
+        override_expected: None,
+    }
+    .test();
+}
+
 /// wasm-pack test --chrome --headless crates/percy-dom --test diff_patch -- replace_with_children
 #[wasm_bindgen_test]
 fn replace_with_children() {
