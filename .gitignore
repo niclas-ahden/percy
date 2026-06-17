@@ -9,3 +9,5 @@ node_modules
 tests/jsdom/jsdom_tests*
 examples/isomorphic/client/dist
 examples/isomorphic/client/build
+
+.direnv
