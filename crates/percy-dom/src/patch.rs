@@ -136,6 +136,23 @@ pub enum PatchSpecialAttribute<'a> {
     CallOnCreateElemOnExistingNode(BreadthFirstNodeIdx, &'a VirtualNode),
     /// Call the [`SpecialAttributes.on_remove_elem`] function on the node.
     CallOnRemoveElem(BreadthFirstNodeIdx, &'a VirtualNode),
+    /// Run the element effect's `setup` on an existing node that just gained an effect, and
+    /// store the resulting state. New nodes run their effect setup automatically on creation.
+    RunEffectSetupOnExistingNode(BreadthFirstNodeIdx, &'a VirtualNode),
+    /// The element effect's key (dependencies) changed: run the old node's effect teardown
+    /// with the stored state, then the new node's effect setup, storing the new state. The
+    /// element itself is not recreated.
+    RerunEffect {
+        /// The node whose effect is re-running.
+        node_idx: BreadthFirstNodeIdx,
+        /// The old virtual node (carries the teardown to run with the old state).
+        old: &'a VirtualNode,
+        /// The new virtual node (carries the setup to run for the new state).
+        new: &'a VirtualNode,
+    },
+    /// Run the element effect's `teardown` with the stored state, because the element is being
+    /// removed (or no longer has an effect).
+    RunEffectTeardown(BreadthFirstNodeIdx, &'a VirtualNode),
     /// Set the node's innerHTML using the [`SpecialAttributes.dangerous_inner_html`].
     SetDangerousInnerHtml(BreadthFirstNodeIdx, &'a VirtualNode),
     /// Set the node's innerHTML to an empty string.
@@ -163,6 +180,9 @@ impl<'a> Patch<'a> {
                 PatchSpecialAttribute::SetDangerousInnerHtml(node_idx, _) => *node_idx,
                 PatchSpecialAttribute::RemoveDangerousInnerHtml(node_idx) => *node_idx,
                 PatchSpecialAttribute::CallOnRemoveElem(node_idx, _) => *node_idx,
+                PatchSpecialAttribute::RunEffectSetupOnExistingNode(node_idx, _) => *node_idx,
+                PatchSpecialAttribute::RerunEffect { node_idx, .. } => *node_idx,
+                PatchSpecialAttribute::RunEffectTeardown(node_idx, _) => *node_idx,
             },
             Patch::RemoveEvents(node_idx, _) => *node_idx,
             Patch::AddEvents(node_idx, _) => *node_idx,
@@ -229,6 +249,15 @@ impl<'a> Patch<'a> {
                     to_find.insert(*node_idx);
                 }
                 PatchSpecialAttribute::CallOnRemoveElem(node_idx, _) => {
+                    to_find.insert(*node_idx);
+                }
+                PatchSpecialAttribute::RunEffectSetupOnExistingNode(node_idx, _) => {
+                    to_find.insert(*node_idx);
+                }
+                PatchSpecialAttribute::RerunEffect { node_idx, .. } => {
+                    to_find.insert(*node_idx);
+                }
+                PatchSpecialAttribute::RunEffectTeardown(node_idx, _) => {
                     to_find.insert(*node_idx);
                 }
             },

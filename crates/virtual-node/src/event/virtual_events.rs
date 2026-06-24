@@ -1,6 +1,7 @@
 use crate::event::event_name::EventName;
 use crate::event::EventHandler;
 use js_sys::Reflect;
+use std::any::Any;
 use std::cell::{Ref, RefCell, RefMut};
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
@@ -66,6 +67,11 @@ struct VirtualEventsInner {
     /// This setup allows us to replace the `EventHandler` after every render without needing
     /// to re-attach event listeners.
     non_delegated_event_wrappers: HashMap<ElementEventsId, HashMap<EventName, EventWrapper>>,
+    /// State produced by an element's `set_element_effect` setup. It lives alongside the
+    /// element's events, keyed by the same [`ElementEventsId`], so it survives the virtual
+    /// node being rebuilt on every render. The teardown patch removes it and passes it to
+    /// the effect's teardown when the element is removed or its effect re-runs.
+    effect_states: HashMap<ElementEventsId, Box<dyn Any>>,
     next_events_id: u32,
 }
 
@@ -233,6 +239,23 @@ impl VirtualEvents {
         borrow.non_delegated_event_wrappers.remove(events_id);
     }
 
+    /// Store the state produced by an element's effect `setup`, keyed by the element's events id.
+    ///
+    /// This is the only place effect state is held between renders. It is taken back out, and
+    /// the teardown run with it, when the element is removed or the effect re-runs (see
+    /// [`VirtualEvents::take_effect_state`]). The teardown patches own this state.
+    /// `remove_node` does not touch it, because an effect-only element (no event handlers)
+    /// never gets a `remove_node` call.
+    pub fn insert_effect_state(&self, events_id: ElementEventsId, state: Box<dyn Any>) {
+        self.borrow_mut().effect_states.insert(events_id, state);
+    }
+
+    /// Take the stored effect state for a node, if any, so it can be handed to the effect's
+    /// teardown.
+    pub fn take_effect_state(&self, events_id: &ElementEventsId) -> Option<Box<dyn Any>> {
+        self.borrow_mut().effect_states.remove(events_id)
+    }
+
     /// Create a new element node.
     pub fn create_element_node(&self) -> VirtualEventNode {
         VirtualEventNode {
@@ -284,6 +307,7 @@ impl VirtualEventsInner {
             root: Rc::new(RefCell::new(root)),
             events: HashMap::new(),
             non_delegated_event_wrappers: HashMap::new(),
+            effect_states: HashMap::new(),
             next_events_id: 0,
         }
     }

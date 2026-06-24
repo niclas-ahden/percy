@@ -62,6 +62,14 @@ impl VElement {
         self.special_attributes
             .maybe_call_on_create_element(&element);
 
+        // Run the element effect's setup and store its state under this element's events id,
+        // so it survives re-renders and can be torn down when the element is removed. Fires
+        // after children (bottom-up), matching the on_create hook.
+        if let Some(state) = self.special_attributes.call_effect_setup(&element) {
+            let eid = event_elem.as_element().unwrap().events_id();
+            events.insert_effect_state(eid, state);
+        }
+
         if let Some(inner_html) = &self.special_attributes.dangerous_inner_html {
             element.set_inner_html(inner_html);
         }
@@ -165,6 +173,23 @@ impl VElement {
         // Attach non-delegated listeners in a tight loop at the end.
         for (el, name, handler, id) in pending_non_delegated {
             crate::event::insert_non_delegated_event(&el, &name, &handler, id, events);
+        }
+
+        // Run the on_create_element hook for hydrated elements too. The fresh-create
+        // path (create_element_node) fires it after children are appended, so we fire it
+        // here after children have hydrated, giving the same bottom-up ordering. Children
+        // recurse through this same function, so each one runs its own hook first.
+        // Hydration already wires up event listeners, and create hooks are the same kind
+        // of node-lifetime concern, so they belong on the same path. Without this a
+        // server-rendered node that carries an on_create hook never runs it, because
+        // hydration is the only time that node is turned into a real element.
+        self.special_attributes.maybe_call_on_create_element(&element);
+
+        // Run the element effect's setup on the hydrated element too (the only time a
+        // server-rendered node is turned into a real element), storing its state under the
+        // element's events id just like the fresh-create path above.
+        if let Some(state) = self.special_attributes.call_effect_setup(&element) {
+            events.insert_effect_state(eid, state);
         }
 
         (element, event_elem_node)

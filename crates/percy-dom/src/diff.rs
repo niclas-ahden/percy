@@ -188,10 +188,25 @@ fn process_diff_job<'a>(ctx: &mut DiffContext<'a>, diff_job: DiffJob<'a>) {
                 ctx.push_patch(Patch::AddEvents(old_node_idx, events_to_add));
             }
 
-            maybe_push_inner_html_patch(new, old_element, new_element, old_node_idx, ctx);
+            // Almost every element carries no special attributes, so gate all four per-kind
+            // diffs behind one check. They only ever emit a patch when the old or new node has
+            // a special attribute set. If neither does, there is nothing for any of them to do.
+            if !old_element.special_attributes.is_empty()
+                || !new_element.special_attributes.is_empty()
+            {
+                maybe_push_inner_html_patch(new, old_element, new_element, old_node_idx, ctx);
 
-            maybe_push_on_create_element_patch(new, old_element, new_element, old_node_idx, ctx);
-            maybe_push_on_remove_element_patch(old, old_element, new_element, old_node_idx, ctx);
+                maybe_push_on_create_element_patch(new, old_element, new_element, old_node_idx, ctx);
+                maybe_push_on_remove_element_patch(old, old_element, new_element, old_node_idx, ctx);
+                maybe_push_element_effect_patch(
+                    old,
+                    new,
+                    old_element,
+                    new_element,
+                    old_node_idx,
+                    ctx,
+                );
+            }
 
             generate_patches_for_children(old_node_idx, old_element, new_element, ctx);
         }
@@ -210,14 +225,31 @@ fn process_delete_job<'a>(ctx: &mut DiffContext<'a>, delete_job: DeleteJob<'a>) 
             ));
         }
 
-        if element_node
-            .special_attributes
-            .on_remove_element_key()
-            .is_some()
-        {
-            ctx.push_patch(Patch::SpecialAttribute(
-                PatchSpecialAttribute::CallOnRemoveElem(delete_job.old_node_idx, delete_job.old),
-            ));
+        // Same one-check-per-node gate as the patch path: only nodes with a special attribute
+        // can have a remove hook or an effect to tear down.
+        if !element_node.special_attributes.is_empty() {
+            if element_node
+                .special_attributes
+                .on_remove_element_key()
+                .is_some()
+            {
+                ctx.push_patch(Patch::SpecialAttribute(
+                    PatchSpecialAttribute::CallOnRemoveElem(delete_job.old_node_idx, delete_job.old),
+                ));
+            }
+
+            if element_node
+                .special_attributes
+                .element_effect_key()
+                .is_some()
+            {
+                ctx.push_patch(Patch::SpecialAttribute(
+                    PatchSpecialAttribute::RunEffectTeardown(
+                        delete_job.old_node_idx,
+                        delete_job.old,
+                    ),
+                ));
+            }
         }
 
         maybe_push_delete_jobs_for_children(ctx, delete_job.old);
@@ -242,6 +274,13 @@ fn replace_node<'a>(diff_job: DiffJob<'a>, ctx: &mut DiffContext<'a>) {
         }
         _ => {}
     };
+    if let Some(elem) = diff_job.old.as_velement_ref() {
+        if elem.special_attributes.element_effect_key().is_some() {
+            ctx.push_patch(Patch::SpecialAttribute(
+                PatchSpecialAttribute::RunEffectTeardown(diff_job.old_node_idx, diff_job.old),
+            ));
+        }
+    }
     ctx.push_patch(Patch::Replace {
         old_idx: diff_job.old_node_idx,
         new_node: diff_job.new,
@@ -412,6 +451,44 @@ fn maybe_push_on_create_element_patch<'a>(
             }
         }
         (Some(_), None) | (None, None) => {}
+    };
+}
+
+/// Diff an element effect across a patch of `old_element` -> `new_element`, where the element
+/// itself persists (same tag). Mirrors how on_create/on_remove keys are diffed, but as a single
+/// effect: a key change tears down then sets up on the same node.
+fn maybe_push_element_effect_patch<'a>(
+    old: &'a VirtualNode,
+    new: &'a VirtualNode,
+    old_element: &VElement,
+    new_element: &VElement,
+    old_node_idx: u32,
+    ctx: &mut DiffContext<'a>,
+) {
+    let old_key = old_element.special_attributes.element_effect_key();
+    let new_key = new_element.special_attributes.element_effect_key();
+
+    match (old_key, new_key) {
+        (None, Some(_)) => {
+            ctx.push_patch(Patch::SpecialAttribute(
+                PatchSpecialAttribute::RunEffectSetupOnExistingNode(old_node_idx, new),
+            ));
+        }
+        (Some(old_id), Some(new_id)) => {
+            if old_id != new_id {
+                ctx.push_patch(Patch::SpecialAttribute(PatchSpecialAttribute::RerunEffect {
+                    node_idx: old_node_idx,
+                    old,
+                    new,
+                }));
+            }
+        }
+        (Some(_), None) => {
+            ctx.push_patch(Patch::SpecialAttribute(
+                PatchSpecialAttribute::RunEffectTeardown(old_node_idx, old),
+            ));
+        }
+        (None, None) => {}
     };
 }
 
@@ -920,6 +997,78 @@ mod tests {
             &parent(vec![div(string_key("a"))]),
             &parent(vec![div(string_key("b"))]),
         ));
+    }
+
+    /// A div carrying an element effect with dependency `key`. Setup/teardown are no-ops:
+    /// the diff only compares effect keys, it never runs them, and `SpecialAttributes`
+    /// equality (hence `Patch` equality) compares an effect by its key alone.
+    fn div_with_effect(key: &'static str) -> VirtualNode {
+        use virtual_node::VElement;
+        let mut elem = VElement::new("div");
+        elem.special_attributes
+            .set_element_effect(key, |_el: web_sys::Element| (), |_state: ()| ());
+        VirtualNode::Element(elem)
+    }
+
+    /// An element that gains an effect (the element itself persists) gets a setup patch.
+    #[test]
+    fn effect_added_to_existing_node() {
+        DiffTestCase {
+            old: html! { <div></div> },
+            new: div_with_effect("k"),
+            expected: vec![Patch::SpecialAttribute(
+                PatchSpecialAttribute::RunEffectSetupOnExistingNode(0, &div_with_effect("k")),
+            )],
+        }
+        .test();
+    }
+
+    /// Changing the effect's dependency key re-runs it (teardown old + setup new) on the
+    /// same element.
+    #[test]
+    fn effect_key_change_reruns() {
+        DiffTestCase {
+            old: div_with_effect("k1"),
+            new: div_with_effect("k2"),
+            expected: vec![Patch::SpecialAttribute(PatchSpecialAttribute::RerunEffect {
+                node_idx: 0,
+                old: &div_with_effect("k1"),
+                new: &div_with_effect("k2"),
+            })],
+        }
+        .test();
+    }
+
+    /// An unchanged effect key produces no patch. The effect and its state are left alone.
+    #[test]
+    fn effect_same_key_no_patch() {
+        DiffTestCase {
+            old: div_with_effect("k"),
+            new: div_with_effect("k"),
+            expected: vec![],
+        }
+        .test();
+    }
+
+    /// Removing an element (here by tag-replace) tears down its effect before the element
+    /// goes away.
+    #[test]
+    fn effect_teardown_on_removal() {
+        DiffTestCase {
+            old: div_with_effect("k"),
+            new: html! { <span></span> },
+            expected: vec![
+                Patch::SpecialAttribute(PatchSpecialAttribute::RunEffectTeardown(
+                    0,
+                    &div_with_effect("k"),
+                )),
+                Patch::Replace {
+                    old_idx: 0,
+                    new_node: &html! { <span></span> },
+                },
+            ],
+        }
+        .test();
     }
 
     /// Verify that we can generate patches that replace a virtual node with another one.

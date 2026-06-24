@@ -420,6 +420,54 @@ fn apply_element_patch(
 
                 Ok(())
             }
+            PatchSpecialAttribute::RunEffectSetupOnExistingNode(node_idx, new_node) => {
+                if let Some(state) = new_node
+                    .as_velement_ref()
+                    .unwrap()
+                    .special_attributes
+                    .call_effect_setup(node)
+                {
+                    let events_id = ctx.events_id_for_old_node_idx.get(node_idx).unwrap();
+                    virtual_events.insert_effect_state(*events_id, state);
+                }
+
+                Ok(())
+            }
+            PatchSpecialAttribute::RerunEffect { node_idx, old, new } => {
+                let events_id = *ctx.events_id_for_old_node_idx.get(node_idx).unwrap();
+
+                // Tear down the old effect (with its stored state) before setting up the new
+                // one, so the re-run is atomic on the same element.
+                if let Some(old_state) = virtual_events.take_effect_state(&events_id) {
+                    old.as_velement_ref()
+                        .unwrap()
+                        .special_attributes
+                        .call_effect_teardown(old_state);
+                }
+                if let Some(state) = new
+                    .as_velement_ref()
+                    .unwrap()
+                    .special_attributes
+                    .call_effect_setup(node)
+                {
+                    virtual_events.insert_effect_state(events_id, state);
+                }
+
+                Ok(())
+            }
+            PatchSpecialAttribute::RunEffectTeardown(node_idx, old_node) => {
+                let events_id = *ctx.events_id_for_old_node_idx.get(node_idx).unwrap();
+
+                if let Some(old_state) = virtual_events.take_effect_state(&events_id) {
+                    old_node
+                        .as_velement_ref()
+                        .unwrap()
+                        .special_attributes
+                        .call_effect_teardown(old_state);
+                }
+
+                Ok(())
+            }
             PatchSpecialAttribute::SetDangerousInnerHtml(_node_idx, new_node) => {
                 let new_inner_html = new_node
                     .as_velement_ref()
